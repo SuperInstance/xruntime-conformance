@@ -84,3 +84,89 @@ The generalisable lesson is the one the fleet already wrote down: **Rule 2 of th
 digest discipline is that the preimage must be explicit.** This is Rule 3 — *the preimage
 must be the thing the docstring claims it is*, checked by a second implementation rather
 than by reading.
+
+---
+
+# Part 2 — attention, and the same bug in a second repo
+
+`SuperInstance/quilt-attention` is the array-valued sibling: cells produce `Float64Array`,
+and the kinds are `posemb`, `stack`, `matmul`, `attn`, `xent`. Its README states it inherits
+`cellgraph`'s convention and documents a deliberate deviation — no blake2b in Node, so sha256
+with the dtype **inside** the preimage — and names that as "Rule 2."
+
+**That deviation is the right call, and it is why the 11 cells agree.**
+
+## The result
+
+`pyattn.py` is an independent Python implementation written from the spec. `node_attn_runner.mjs`
+calls their `evaluateForward` unmodified. Weights pinned, not seeded. One head, `len=3`,
+`dim=4`, one positional table — so the arithmetic actually includes a summation order:
+
+```
+loss f64hex  python : 3ff63c3088de7d5f
+loss f64hex  node   : 3ff63c3088de7d5f    IDENTICAL, bit for bit
+per-cell array digests : 11/11 identical
+```
+
+Through `posemb` ×3, `stack`, `matmul` ×4, `attn` (Q·Kᵀ/√d + row softmax), and `xent`.
+**Two runtimes, no shared source, bit-identical through a real attention forward pass.**
+
+## The method detail that makes it possible
+
+`matmul` accumulates in a specific naive order:
+
+```js
+for (i) for (k) { if (X[i*p+k] === 0) continue; for (j) out[i*c+j] += xv * W[k*c+j]; }
+```
+
+That is an outer-product accumulation, not a blocked or vectorised sum. **A numpy matmul
+on the Python side would have summed in a different order and produced different bits** —
+and the conclusion would have been "the runtimes disagree," which would have been a statement
+about BLAS threading rather than about the convention. `pyattn.py` is plain Python loops in
+the same order. Slow on purpose.
+
+Worth writing down: **if you try this with a fast matrix library and the runtimes disagree,
+the library is the most likely explanation.**
+
+## The bug is in both repos, character for character
+
+```js
+// quilt-attention  src/attncells.mjs:78  (scalarSha)
+// quilt-nn         src/cellgraph.mjs     (lossShaOf)
+return sha256hex(Buffer.from(f64hex(x), 'hex').toString('latin1'));
+```
+
+`toString('latin1')` produces a **string**, and `.update(str)` encodes it as **UTF-8**, so
+every byte ≥ 0x80 becomes two bytes. On this repo's own loss value:
+
+```
+sha256(bytes.fromhex(hex))          778058226d15f9a85ea68b2ffb6178225f2553c7
+sha256(utf8(latin1decode(bytes)))   e41abcd419d16d369d0e6d393ed1a342b4e15497
+```
+
+Two implementations that both state they share no source made the identical mistake, which
+suggests it is simply the natural way to read *"turn these hex bytes into something hashable."*
+`arrayDigest` in the same file is correct, and is the fix in miniature:
+
+```js
+sha256hex(`${DTYPE_TAG}|8|${f64hex(x)}`)   // legible string preimage, dtype inside
+```
+
+Filed as [`quilt-attention` issue #1](https://github.com/SuperInstance/quilt-attention/issues/1),
+alongside [`quilt-nn` issue #1](https://github.com/SuperInstance/quilt-nn/issues/1).
+
+## The scoreboard, after three runtimes
+
+| artefact | verdict |
+|---|---|
+| cell computation, scalars (`quilt-nn`) | **23/23 digests, loss bit-identical** |
+| cell computation, arrays (`quilt-attention`) | **11/11 digests, loss bit-identical** |
+| `arrayDigest` (dtype inside the preimage) | **portable** |
+| `scalarSha` / `lossShaOf` (latin1 → UTF-8) | **not portable — replicated in two repos** |
+| `evaluateForward` on a cold env | throws; `initEnv` referenced but not exported |
+
+**The convention is real. Two of its digest definitions are not, and neither had a
+cross-runtime test until today.** That is the whole argument for building a second
+implementation: both bugs are invisible to a test written by the same person who wrote the
+string, and one of them was replicated verbatim into a repo that documents itself as
+sharing no source with the other.
