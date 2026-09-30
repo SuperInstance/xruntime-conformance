@@ -1,0 +1,8 @@
+{
+ "cells_common": 11,
+ "cells_identical": 11,
+ "loss_f64hex_py": "3ff63c3088de7d5f",
+ "loss_f64hex_node": "3ff63c3088de7d5f",
+ "scalar_portable": "778058226d15f9a85ea68b2ffb6178225f2553c7a9de318560a10b4964d37203",
+ "scalar_as_written": "e41abcd419d16d369d0e6d393ed1a342b4e15497a36e660d4e2e79971f538a0a"
+}
