@@ -1,0 +1,8 @@
+{
+ "loss_f64hex_py": "3fd113560f9094f0",
+ "loss_f64hex_node": "3fd113560f9094f0",
+ "loss_sha_py": "a1ecb2f63fed9176dee6159e2c065b86f7dfc7f617f6ed8586754943dc4e6bde",
+ "loss_sha_node": "ce231e5e0dd296be5213c3b64a7dc3590fdc219a33a0a4fb5a865b4d18678572",
+ "cells_common": 23,
+ "cells_identical": 23
+}
