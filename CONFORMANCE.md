@@ -232,3 +232,60 @@ two an agent copied between.
 That is a clean, slightly uncomfortable result: **the convention is robust and the copy is
 not.** Two implementations that document themselves as sharing no source made the same
 mistake, which means the mistake travels by being read, not by being invented.
+
+---
+
+# Part 4 — a fork in the doctrine, found by reading rather than testing
+
+`micrograd-quilt` does **not** use the cell-graph convention. Zero files in it contain a
+`"kind"` field. It records the *same six opcodes* in a completely different data structure:
+
+```python
+def bind(self,  v): return self._emit({"t":"BIND",   "id":v.id, "data":v.data})
+def link(self,  v): return self._emit({"t":"LINK",   "id":v.id, "op":v._op, "p":[p.id for p in v._parents]})
+def effect(self, node, parent, g): return self._emit({"t":"EFFECT","node":node.id,"parent":parent.id,"g":g})
+def tick(self, step, v): return self._emit({"t":"TICK","step":step,"node":v.id})
+def view(self, node, **kw): return self._emit({"t":"VIEW","node":node.id, **kw})
+def forget(self, before): return self._emit({"t":"FORGET","before":before})
+```
+
+**A tape, not a graph.** The graph is *reconstructed* by accumulation from the ordered log.
+
+## The two forms buy different things, and the difference is not cosmetic
+
+| | tape (`micrograd-quilt`) | cell graph (`cellgraph`, `quilt-nn`, `quilt-attention`) |
+|---|---|---|
+| order | **fixed and recorded** — the log *is* the order | **derived** — array order is merely a topological one |
+| re-evaluate a subgraph | impossible; the tape is a prefix history | **trivial** — evaluate any cell alone |
+| forward replay | exact, by construction | exact, if you re-derive the order |
+| random access to a past value | only by replaying to that point | direct |
+
+**The consequence is concrete and already demonstrated.** `find_fault` — the routine that
+evaluates a suspect cell and diffs witness digests downstream to localise a fault — **only
+works on the cell-graph form.** It is a random-access operation on the graph. A tape cannot
+support it, because the tape's guarantee is exactly that the order is fixed.
+
+So the fleet has, without either implementation being wrong:
+
+- **a graph form**, which supports localisation, fault attribution, and evaluation of one
+  cell in isolation, at the cost of having to specify a topological order and be honest that
+  it is one;
+- **a tape form**, which supports exact replay and is simpler to append to, at the cost of
+  giving up everything that requires looking sideways.
+
+## What this should settle, not start
+
+This is a fork in the doctrine and it should be a **decision, not a merge**. The proposal:
+
+> **A cell graph is the canonical artefact. A tape is a rendering of one.**
+
+That preserves both: `micrograd-quilt`'s tape is exactly what you would generate *from* a
+cell graph for replay, and its `_canon` serialisation plus FNV chain is a perfectly good
+replay digest. Nothing is lost, and the fault-localisation capability is not duplicated
+across two incompatible ways.
+
+**The test for whether a thing is a cell or a tape, and it is sharp:** *can you evaluate one
+cell in isolation, without replaying everything before it?* If yes, it is a graph. If it can
+only be run front to back, it is a tape. Both are legitimate; they are just not the same
+artefact, and calling them the same thing is how you end up unable to localise a fault in
+a system that has one.
