@@ -289,3 +289,74 @@ cell in isolation, without replaying everything before it?* If yes, it is a grap
 only be run front to back, it is a tape. Both are legitimate; they are just not the same
 artefact, and calling them the same thing is how you end up unable to localise a fault in
 a system that has one.
+
+---
+
+# Part 5 — a correction to Part 1, and the third occurrence of the bug
+
+**I was wrong about the origin of the `latin1` bug.** I wrote:
+
+> "Two implementations that both state they share no source made the identical mistake,
+> which suggests it is the natural way to read 'turn these hex bytes into something
+> hashable.'"
+
+A fleet-wide sweep found a **third** occurrence:
+
+| repo / line | status |
+|---|---|
+| `quilt-nn`/`src/cellgraph.mjs`:**65** | origin — `lossShaOf`, called from `train.mjs:61,150` |
+| `quilt-attention`/`src/attncells.mjs`:**78** | origin — `scalarSha`, called from `train.mjs:136,137,208,213` |
+| `quilt-ml-recipes`/`recipes/r2-cellgraph-mlp-training/index.mjs`:**45** | **declared copy** — its own header, lines 9–10, says it was copied from `quilt-nn @ 1ae7977` |
+
+So it is **two points of origin, not two convergent mistakes**, and the third is documented
+as a copy. My "two independent implementations made the same mistake" was a story I liked
+more than the evidence supported. The honest version is worse and more useful: **the bug
+travels by being read.** One mistake, and something that documents itself as having read it.
+
+**The blast radius is not cosmetic either.** Those digests chain into receipts that are
+re-verified on replay, so the non-portable step sits in the **integrity path of the training
+loop**. Fixing the source at `quilt-nn/src/cellgraph.mjs:65` and the acknowledged
+derivative fixes all three.
+
+`quilt-rl`/`src/qlearn.mjs`:36,43–51 has `f64hex` + `sha256` and joins as UTF-8 — the
+**correct** pattern, independently written, in the same fleet. `quilt-ewitness`/`src/train.mjs`:12
+explicitly disclaims the pattern. So the fleet knows the right form and reaches for the
+wrong one anyway about a third of the time.
+
+## The sweep also found a live defect, in the package that owns the canon
+
+`substrate-foundation` — inherited by every `substrate-*` repo — destructured **eleven
+per-opcode names** out of `@superinstance/opcode-canon`, which exports **arrays**:
+
+```
+ALL_OPCODES  = ["BIND","LINK","EFFECT","VIEW","TICK",
+                "ATTEST","DELEGATE","CONTEST","MERGE","REVOKE","WITHDRAW"]   correct
+BIND         = undefined      ATTEST  = undefined      MERGE  = undefined
+LINK         = undefined      DELEGATE= undefined      REVOKE = undefined
+EFFECT       = undefined      CONTEST = undefined      WITHDRAW=undefined
+VIEW         = undefined
+TICK         = undefined      MERGER  = undefined  (never an opcode; canonical is MERGE)
+```
+
+**All eleven were `undefined` at runtime** and nothing threw, because they were only
+re-exported rather than used in logic there. A consumer doing
+`const { BIND } = require('substrate-foundation')` got `undefined`, silently.
+
+Fixed — the eleven are now derived from `ALL_OPCODES` and cannot drift from it — with
+`test/exports.test.js` asserting that every name is *defined*, that the set is exactly the
+canon set, that each agrees with the canon package's signatures, and that `MERGER` is absent.
+**The test that would have caught this is "does it load", and that is not the question.**
+Verified from a fresh clone: 0 undefined, 5/5 pass.
+
+## The lesson the fleet has not drawn yet
+
+The canary is applied to the **fixture string** and never to the **opcode names**. The
+conservation law is checked where the numbers are; **the alphabet is unchecked.** That is
+precisely how `MERGER` survived in the package that defines the canon — and it is why the
+fix above had to be "derive it" rather than "correct the spelling," since a spelled
+correction would leave the other ten broken and the bug looking fixed.
+
+**Proposal: a canary over the alphabet.** FNV-1a 64 over the sorted `ALL_OPCODES` joined by
+a fixed separator, asserted in CI. It is one line, it is cheap, and it would have failed the
+day this shipped. A digest over the *words* the substrate is made of, not only over the
+bytes it hashes.
