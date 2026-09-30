@@ -170,3 +170,65 @@ cross-runtime test until today.** That is the whole argument for building a seco
 implementation: both bugs are invisible to a test written by the same person who wrote the
 string, and one of them was replicated verbatim into a repo that documents itself as
 sharing no source with the other.
+
+---
+
+# Part 3 — the fourth implementation, and a fleet-wide canary census
+
+`SuperInstance/micrograd-quilt` is a different shape from the three above: it is an autograd
+engine with a **witness tape** (`quilt/tape.py`) — an append-only FNV-1a 64 hash chain over
+opcode rows (BIND, LINK, EFFECT, VIEW, TICK, FORGET). So it exercises a different part of
+the doctrine: the chain, not the cell digest.
+
+It also ships its own known-answer vectors, which makes it checkable in one line.
+
+## It agrees, and it honours its own KAT
+
+```
+'café Δ 日本語'  micrograd-quilt  0x24A555471370B18D    == canary
+'a'                              0xAF63DC4C8601EC8C    == its published KAT
+''                               0xCBF29CE484222325    == the FNV offset basis
+'foobar'                         0x85944171F73967E8    == classic test vector
+'abc'                            0xE71FA2190541574B
+'quilt'                          0x4B7FB2143373CE1E
+```
+
+**6/6 identical to an independent implementation**, the published KAT is honoured, and the
+fleet canary holds.
+
+## The accent trap, third sighting
+
+```
+'café Δ 日本語'  ->  0x24A555471370B18D    the canary
+'cafe Δ 日本語'  ->  0xFEE91CF40962B966    not the canary
+```
+
+Same shape on screen, different test. It has now been hit in the Futhark canary, in the
+education site, and here — in a repository that had nothing to do with either of them. That
+is three sightings across three languages and three unrelated pieces of work, which makes it
+a property of the fixture rather than a mistake anyone made once.
+
+**It belongs in the fixture's own name.** A constant called `CANARY` and a fixture called
+`"cafe Δ 日本語"` will eventually be paired wrongly, and nothing in the code will complain.
+Naming it `FIXTURE_ACCENTED_CANARY` costs nothing and removes the ambiguity at the point
+of use.
+
+## Fleet census
+
+| implementation | language | what it hashes | agrees? |
+|---|---|---|---|
+| `micrograd-quilt` | Python | witness tape chain | **yes**, KAT honoured, canary holds |
+| `cellgraph` | Python | port canary (BLAKE2b for tensors) | **yes** |
+| `QuiltCanary.jl` | Julia | port canary | **yes**, 13/13 |
+| `canary-3lang` (Futhark) | Futhark | port canary | **yes**, verified by execution |
+| `audit-trail` | Rust | receipt chain | **yes**, 14/14 |
+| `quilt-nn` | JavaScript | `lossShaOf` | **NO** — latin1→UTF-8 |
+| `quilt-attention` | JavaScript | `scalarSha` | **NO** — identical bug |
+
+**Five of seven agree. The two that don't are the two that share a bug rather than a
+convention.** Everything the fleet wrote independently agrees; the two that diverge are the
+two an agent copied between.
+
+That is a clean, slightly uncomfortable result: **the convention is robust and the copy is
+not.** Two implementations that document themselves as sharing no source made the same
+mistake, which means the mistake travels by being read, not by being invented.
